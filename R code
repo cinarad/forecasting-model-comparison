@@ -1,0 +1,450 @@
+library(fpp3)
+# Use file.choose() to interactively select the CSV file
+file_path <- file.choose()
+
+# Read the selected CSV file into a data frame
+data <- read.csv(file_path)
+head(data)
+##   Time   Period    Sales
+## 1    1 1991 Jul 365325.8
+## 2    2 1991 Aug 340770.1
+## 3    3 1991 Sep 367335.2
+## 4    4 1991 Oct 418661.5
+## 5    5 1991 Nov 427013.7
+## 6    6 1991 Dec 512254.2
+# Converting dataset to tsibble, and scaling the data by 1e6:
+df <- data |>
+  mutate(Time = yearmonth(Period),
+         Sales = Sales / 1e6) |>
+  as_tsibble(index = Time)
+df <- df |>
+  select(-Period)
+
+head(df)
+## # A tsibble: 6 x 2 [1M]
+##       Time Sales
+##      <mth> <dbl>
+## 1 1991 Jul 0.365
+## 2 1991 Aug 0.341
+## 3 1991 Sep 0.367
+## 4 1991 Oct 0.419
+## 5 1991 Nov 0.427
+## 6 1991 Dec 0.512
+
+df |>
+autoplot(Sales) +
+labs(title="Australia HO3 Drug Sales",
+y="Sales")
+
+# Forecast the next 2 years, using Simple Exponential Smoothing (SES):
+fit <- df |>
+model(
+SES = ETS(Sales ~ error("A") + trend("N") + season("N")),
+)
+fc <- fit |>
+  forecast(h = 24)
+fc |>
+  autoplot(df) +
+  labs(title="HO3 Sales 2 Years Forecasting using SES",
+       y="Sales")
+
+# Forecast the next 2 years, using Holt's linear trend (HLT):
+fit <- df |>
+model(
+HLT = ETS(Sales ~ error("A") + trend("A") + season("N")),
+)
+fc <- fit |>
+  forecast(h = 24)
+fc |>
+  autoplot(df) +
+  labs(title="HO3 Sales 2 Years Forecasting using HLT",
+       y="Sales") 
+
+
+# Forecast the next 2 years, using Holt's damped trend (HDT):
+fit <- df |>
+model(
+HDT = ETS(Sales ~ error("A") + trend("Ad") + season("N"))
+)
+fc <- fit |>
+  forecast(h = 24)
+fc |>
+  autoplot(df) +
+  labs(title="HO3 Sales 2 Years Forecasting using HDT",
+       y="Sales")
+
+# Forecasting 2 years using Holt-Winter's Seasonal methods (HW), observing multiplicative and additive holt-winters, and with damped for both methods:
+fit_hw <- df |>
+  model(model(Multiplicative = ETS(Sales ~ error("M") + trend("A") + season("M")),
+        Additive = ETS(Sales ~ error("A") + trend("A") + season("A")),
+        MultiplicativeDamped = ETS(Sales ~ error("M") + trend("Ad") + season("M")),
+        AdditiveDamped = ETS(Sales ~ error("A") + trend("Ad") + season("A")))
+fc_hw <- fit_hw |>
+  forecast(h = 24)
+fc_hw |>
+  autoplot(df, level = NULL) +
+  labs(title="HO3 Sales 2 Years Forecasting using HWmul/ HWad",
+       y="Sales") +
+  guides(colour = guide_legend(title = "Forecast"))
+
+# Generate one-step-ahead forecasts, applying cross validation: 
+tr_stp1 <- df |> slice(1:(n()-1)) |>
+  stretch_tsibble(.init = 36, .step = 1)
+fc_stp1 <- tr_stp1 |>
+  model(
+    SES = ETS(Sales ~ error("A") + trend("N") + season("N")),
+    HLT = ETS(Sales ~ error("A") + trend("A") + season("N")),
+    HDT = ETS(Sales ~ error("A") + trend("Ad") + season("N")),
+    HWmul = ETS(Sales ~ error("M") + trend("A") + season("M")),
+    HWad = ETS(Sales ~ error("A") + trend("Ad") + season("A")),
+    HWDmul = ETS(Sales ~ error("M") + trend("Ad") + season("M")),
+    HWDad = ETS(Sales ~ error("A") + trend("Ad") + season("A"))) |>
+  forecast(h = 1)
+fc_stp1 |>
+  accuracy(df) |>
+  select(-ME, -MPE, -MAPE, -MASE, -RMSSE, -ACF1)
+## # A tibble: 7 × 4
+##   .model .type   RMSE    MAE
+##   <chr>  <chr>  <dbl>  <dbl>
+## 1 HDT    Test  0.168  0.104 
+## 2 HLT    Test  0.173  0.110 
+## 3 HWad   Test  0.0731 0.0552
+## 4 HWDad  Test  0.0731 0.0552
+## 5 HWDmul Test  0.0709 0.0539
+## 6 HWmul  Test  0.0730 0.0555
+## 7 SES    Test  0.168  0.104
+# Generate four-step-ahead forecasts
+tr_stp4 <- df |> slice(1:(n()-4)) |>
+  stretch_tsibble(.init = 36, .step = 4)
+fc_stp4 <- tr_stp1 |>
+  model(
+    SES = ETS(Sales ~ error("A") + trend("N") + season("N")),
+    HLT = ETS(Sales ~ error("A") + trend("A") + season("N")),
+    HDT = ETS(Sales ~ error("A") + trend("Ad") + season("N")),
+    HWmul = ETS(Sales ~ error("M") + trend("A") + season("M")),
+    HWad = ETS(Sales ~ error("A") + trend("Ad") + season("A")),
+    HWDmul = ETS(Sales ~ error("M") + trend("Ad") + season("M")),
+    HWDad = ETS(Sales ~ error("A") + trend("Ad") + season("A"))) |>
+  forecast(h = 4)
+fc_stp4 |>
+  accuracy(df) |>
+  select(-ME, -MPE, -MAPE, -MASE, -RMSSE, -ACF1)
+## Warning: The future dataset is incomplete, incomplete out-of-sample data will be treated as missing. 
+## 3 observations are missing between 2008 Jul and 2008 Sep
+## # A tibble: 7 × 4
+##   .model .type   RMSE    MAE
+##   <chr>  <chr>  <dbl>  <dbl>
+## 1 HDT    Test  0.240  0.186 
+## 2 HLT    Test  0.242  0.186 
+## 3 HWad   Test  0.0789 0.0602
+## 4 HWDad  Test  0.0789 0.0602
+## 5 HWDmul Test  0.0782 0.0601
+## 6 HWmul  Test  0.0787 0.0606
+## 7 SES    Test  0.240  0.186
+# Generate six-step-ahead forecasts
+tr_stp6 <- df |> slice(1:(n()-6)) |>
+  stretch_tsibble(.init = 36, .step = 6)
+fc_stp6 <- tr_stp1 |>
+  model(
+    SES = ETS(Sales ~ error("A") + trend("N") + season("N")),
+    HLT = ETS(Sales ~ error("A") + trend("A") + season("N")),
+    HDT = ETS(Sales ~ error("A") + trend("Ad") + season("N")),
+    HWmul = ETS(Sales ~ error("M") + trend("A") + season("M")),
+    HWad = ETS(Sales ~ error("A") + trend("Ad") + season("A")),
+    HWDmul = ETS(Sales ~ error("M") + trend("Ad") + season("M")),
+    HWDad = ETS(Sales ~ error("A") + trend("Ad") + season("A"))) |>
+  forecast(h = 6)
+fc_stp6 |>
+  accuracy(df) |>
+  select(-ME, -MPE, -MAPE, -MASE, -RMSSE, -ACF1)
+## Warning: The future dataset is incomplete, incomplete out-of-sample data will be treated as missing. 
+## 5 observations are missing between 2008 Jul and 2008 Nov
+## # A tibble: 7 × 4
+##   .model .type   RMSE    MAE
+##   <chr>  <chr>  <dbl>  <dbl>
+## 1 HDT    Test  0.267  0.223 
+## 2 HLT    Test  0.267  0.221 
+## 3 HWad   Test  0.0825 0.0628
+## 4 HWDad  Test  0.0825 0.0628
+## 5 HWDmul Test  0.0818 0.0630
+## 6 HWmul  Test  0.0817 0.0630
+## 7 SES    Test  0.267  0.223
+# Table for MAE and MSE results:
+stp1 <- tribble(
+  ~step_ahead, ~model,  ~RMSE, ~MAE,
+  1, "HDT", 0.16817331, 0.10420211,
+  1, "HLT", 0.17319598, 0.11038657,
+  1, "MHW", 0.07301154, 0.05553292,
+  1, "SES", 0.16823467, 0.10440352,
+  1, "HWad", 0.07308176, 0.05522043,
+  1, "HWDad", 0.07308176, 0.05522043,
+  1, "HWDmul", 0.07086046, 0.05388931
+)
+stp4 <- tribble(
+  ~step_ahead, ~model, ~RMSE, ~MAE,
+  4, "HDT", 0.24012898, 0.18581179,
+  4, "HLT", 0.24156500, 0.18599220,
+  4, "MHW", 0.07865661, 0.06057076,
+  4, "SES", 0.24001809, 0.18604168,
+  4, "HWad", 0.07892714, 0.06022092,
+  4, "HWDad", 0.07892714, 0.06022092,
+  4, "HWDmul", 0.07819006, 0.06010534
+)
+stp6 <- tribble(
+  ~step_ahead, ~model,~RMSE, ~MAE,
+  6, "HDT", 0.26710797, 0.22278858,
+  6, "HLT", 0.26735159, 0.22100399,
+  6, "MHW", 0.08170965, 0.06298554,
+  6, "SES", 0.26688740, 0.22280720,
+  6, "HWad", 0.08250761, 0.06276994,
+  6, "HWDad", 0.08250761, 0.06276994,
+  6, "HWDmul", 0.08182528, 0.06299612
+)
+# Calculate MSE from RMSE
+stp1 <- stp1 |>
+  mutate(MSE = RMSE^2)
+
+stp4 <- stp4 |>
+  mutate(MSE = RMSE^2)
+
+stp6 <- stp6 |>
+  mutate(MSE = RMSE^2)
+
+# Combine the data frames
+table <- bind_rows(stp1, stp4, stp6) |>
+  select(-RMSE)
+table <- table |>
+  arrange(step_ahead, MAE)
+
+table
+## # A tibble: 21 × 4
+##    step_ahead model     MAE     MSE
+##         <dbl> <chr>   <dbl>   <dbl>
+##  1          1 HWDmul 0.0539 0.00502
+##  2          1 HWad   0.0552 0.00534
+##  3          1 HWDad  0.0552 0.00534
+##  4          1 HWmul  0.0555 0.00533
+##  5          1 HDT    0.104  0.0283 
+##  6          1 SES    0.104  0.0283 
+##  7          1 HLT    0.110  0.0300 
+##  8          4 HWDmul 0.0601 0.00611
+##  9          4 HWad   0.0602 0.00623
+## 10          4 HWDad  0.0602 0.00623
+## 11		  4 HWmul  0.0606 0.00619
+## 12          4 HDT    0.1858 0.05766
+## 13		  4 HLT    0.1860 0.05835
+## 14 	  	  4 SES    0.1860 0.05761
+## 15		  6 HWad   0.0628 0.00681
+## 16		  6 HWDad  0.0628 0.00681
+## 17		  6 HWmul  0.0630 0.00668
+## 18		  6 HWDmul 0.0630 0.00670
+## 19		  6 HLT    0.2210 0.07148
+## 20		  6 HDT    0.2228 0.07135
+## 21		  6 SES    0.2228 0.07123
+
+# Autocorrelation plot:
+df |>
+  gg_tsdisplay((Sales), plot_type='partial') +
+  labs(title="Visualizing Data ACF and Partial ACF for Sales")
+
+# Applying Box-Cox transformation:
+lambda <- df |>
+features(Sales, features = guerrero) |>
+pull(lambda_guerrero)
+bc_df <- df |>
+  mutate(bc_df = box_cox(Sales, lambda = lambda))
+bc_df <- bc_df[, -2]
+autoplot(bc_df) + 
+  labs(title="BoxCox Data transformation")
+## Plot variable not specified, automatically selected `.vars = bc_df`
+
+head(bc_df)
+## # A tsibble: 6 x 2 [1M]
+##       Time  bc_df
+##      <mth>  <dbl>
+## 1 1991 Jul -0.977
+## 2 1991 Aug -1.04 
+## 3 1991 Sep -0.972
+## 4 1991 Oct -0.848
+## 5 1991 Nov -0.830
+## 6 1991 Dec -0.656
+
+# Applying  seasonal difference:
+sd_bc_df <- bc_df |>
+  mutate(sd_bc_df = difference(bc_df, lag=12))
+sd_bc_df |>
+  autoplot(sd_bc_df) + 
+  labs(title="Seasonal Differencing")
+## Warning: Removed 12 row(s) containing missing values (geom_path).
+
+# check if it is necessary additional seasonal difference:
+sd_bc_df |>
+features(sd_bc_df, unitroot_nsdiffs)
+## # A tibble: 1 × 1
+##   nsdiffs
+##     <int>
+## 1       0
+
+sd_bc_df |>
+  gg_tsdisplay(sd_bc_df, plot_type = 'partial', lag = 24) +
+      labs(title="Seasonally differenced", y= "")
+## Warning: Removed 12 row(s) containing missing values (geom_path).
+## Warning: Removed 12 rows containing missing values (geom_point).
+
+od_sd_bc_df <- sd_bc_df |>
+  mutate(od_sd_bc_df = difference(sd_bc_df))
+od_sd_bc_df |>
+  autoplot(od_sd_bc_df) + 
+  labs(title="Ordinary differenced", y= "")
+## Warning: Removed 13 row(s) containing missing values (geom_path).
+
+# Check if additional ordinary difference is necessary:
+od_sd_bc_df |>
+  features(od_sd_bc_df, unitroot_ndiffs)
+## # A tibble: 1 × 1
+##   ndiffs
+##    <int>
+## 1      0
+
+# Applying ACF to analyse the white noise, and stationarity
+od_sd_bc_df |>
+  gg_tsdisplay(od_sd_bc_df, plot_type='partial', lag = 24) +
+  labs(title="Ordinary differenced")
+## Warning: Removed 13 row(s) containing missing values (geom_path).
+## Warning: Removed 13 rows containing missing values (geom_point).
+
+# Lets process the proposed models:
+arm_fit <- bc_df |>
+    model(
+      arima110110 = ARIMA(bc_df ~ 0 + pdq(1,1,0) + PDQ(1,1,1)),
+      arima111111 = ARIMA(bc_df ~ 0 + pdq(1,1,0) + PDQ(1,1,0)), 
+      arima210111 = ARIMA(bc_df ~ 0 + pdq(2,1,0) + PDQ(1,1,1)),
+      arima210110 = ARIMA(bc_df ~ 0 + pdq(2,1,0) + PDQ(1,1,0)),
+      arima113111 = ARIMA(bc_df ~ 0 + pdq(1,1,3) + PDQ(1,1,1)),
+      arima113110 = ARIMA(bc_df ~ 0 + pdq(1,1,3) + PDQ(1,1,0)),
+      arima310111 = ARIMA(bc_df ~ 0 + pdq(3,1,0) + PDQ(1,1,1)),
+      arima310110 = ARIMA(bc_df ~ 0 + pdq(3,1,0) + PDQ(1,1,0)),
+      arima312111 = ARIMA(bc_df ~ 0 + pdq(3,1,2) + PDQ(1,1,1)),
+      arima312110 = ARIMA(bc_df ~ 0 + pdq(3,1,2) + PDQ(1,1,0)),
+      arima110112 = ARIMA(bc_df ~ 0 + pdq(1,1,0) + PDQ(1,1,2)),
+      arima210112 = ARIMA(bc_df ~ 0 + pdq(2,1,0) + PDQ(1,1,2)),
+
+      stepwise = ARIMA(bc_df),
+      search   = ARIMA(bc_df, stepwise =  FALSE)
+    )
+## Warning in sqrt(diag(best$var.coef)): NaNs produced
+arm_fit
+## # A mable: 1 x 14
+##                 arima110110               arima111111               arima210111
+##                     <model>                   <model>                   <model>
+## 1 <ARIMA(1,1,0)(1,1,1)[12]> <ARIMA(1,1,0)(1,1,0)[12]> <ARIMA(2,1,0)(1,1,1)[12]>
+## # … with 11 more variables: arima210110 <model>, arima113111 <model>,
+## #   arima113110 <model>, arima310111 <model>, arima310110 <model>,
+## #   arima312111 <model>, arima312110 <model>, arima110112 <model>,
+## #   arima210112 <model>, stepwise <model>, search <model>
+glance(arm_fit) |> arrange(AICc) |> select(.model:BIC)
+## # A tibble: 13 × 6
+##    .model       sigma2 log_lik   AIC  AICc   BIC
+##    <chr>         <dbl>   <dbl> <dbl> <dbl> <dbl>
+##  1 search      0.00461    241. -468. -468. -446.
+##  2 stepwise    0.00469    238. -466. -466. -450.
+##  3 arima210111 0.00473    238. -465. -465. -449.
+##  4 arima210112 0.00471    239. -465. -465. -446.
+##  5 arima310111 0.00474    238. -464. -463. -444.
+##  6 arima113111 0.00483    237. -460. -460. -437.
+##  7 arima110110 0.00520    227. -445. -445. -432.
+##  8 arima110112 0.00517    228. -445. -445. -429.
+##  9 arima210110 0.00572    222. -437. -437. -424.
+## 10 arima312110 0.00562    225. -437. -436. -414.
+## 11 arima310110 0.00575    222. -435. -434. -419.
+## 12 arima113110 0.00584    222. -431. -431. -412.
+## 13 arima111111 0.00656    209. -412. -412. -403.
+
+# Fitting the ARIMA model from the proposed model with the best AICc ARIMA(2,1,0)(1,1,1)12 and residuals: 
+arm_fit <- bc_df |>
+  model(
+    arima210111 = ARIMA(bc_df ~ pdq(2,1,0) + PDQ(1,1,1))
+     )
+fit |>
+  gg_tsresiduals(lag=24) +
+  labs(title="Residuals from fitted ARIMA(2,1,0)(1,1,1)12")
+
+# Use ARIMA_select to automatically select the best ARIMA model
+arima_fit <- bc_df |>
+  model(ARIMA(bc_df))
+
+report(arima_fit)
+## Series: bc_df 
+## Model: ARIMA(2,1,0)(0,1,2)[12] 
+## 
+## Coefficients:
+##           ar1      ar2     sma1     sma2
+##       -0.7685  -0.3486  -0.5649  -0.1969
+## s.e.   0.0726   0.0729   0.0846   0.0897
+## 
+## sigma^2 estimated as 0.004689:  log likelihood=238.24
+## AIC=-466.48   AICc=-466.15   BIC=-450.22
+# Residuals:
+arima_fit <- bc_df |>
+  model(
+    arima210012 = ARIMA(bc_df ~ pdq(2,1,0) + PDQ(0,1,2))
+     )
+arima_fit |>
+  gg_tsresiduals() +
+  labs(title = "Residual Analysis of Automatically Selected ARIMA(2,1,0)(0,1,2)12 Model")
+
+# ETS model residuals plot:
+fit_ets <- df |>
+  model(Multiplicative = ETS(Sales ~ error("M") + trend("A") + season("M")))
+gg_tsresiduals(fit_ets, lag_max = 24) +
+  labs(title = "Residuals from ETS HWmul")
+
+nz_cpi <- global_economy|>
+  filter(Country == "New Zealand")
+nz_cpi |>
+  autoplot(CPI) +
+  labs(title = "New Zealand consumer price index (CPI)") 
+
+# Fitting Holt's linear trend, Holt-Winters additive and a Holt-Winters Multiplicativce models:
+fit_all <- nz_cpi |>
+  model(
+    HLT = ETS(CPI~ error("A") + trend("A") + season("N")),
+    HWad = ETS(CPI ~ error("A") + trend("A") + season("A")),
+    HWmul = ETS(CPI ~ error("M") + trend("A") + season("M")))
+## Warning: 1 error encountered for HWad
+## [1] A seasonal ETS model cannot be used for this data.
+## Warning: 1 error encountered for HWmul
+## [1] A seasonal ETS model cannot be used for this data.
+accuracy(fit_all)
+## # A tibble: 3 × 11
+##   Country    .model .type       ME   RMSE     MAE     MPE   MAPE    MASE   RMSSE
+##   <fct>      <chr>  <chr>    <dbl>  <dbl>   <dbl>   <dbl>  <dbl>   <dbl>   <dbl>
+## 1 New Zeala… HLT    Trai…   0.0447   1.08   0.759   0.721   1.86   0.409   0.448
+## 2 New Zeala… HWad   Trai… NaN      NaN    NaN     NaN     NaN    NaN     NaN    
+## 3 New Zeala… HWmul  Trai… NaN      NaN    NaN     NaN     NaN    NaN     NaN    
+## # … with 1 more variable: ACF1 <dbl>
+
+# Number of pigs slaughtered in Victoria analysis:
+series <- aus_livestock |>
+  filter(Animal == "Pigs", State == "Victoria")
+series |>
+  autoplot(Count) +
+  labs(title = "Pigs slaughtered in Victoria") 
+
+# Fitting Holt's linear trend, Holt-Winters additive and a Holt-Winters Multiplicative models:
+fit_series <- series |>
+  model(
+    HLT = ETS(Count~ error("A") + trend("A") + season("N")),
+    HWad = ETS(Count ~ error("A") + trend("A") + season("A")),
+    HWmul = ETS(Count ~ error("M") + trend("A") + season("M"))
+)
+accuracy(fit_series)
+## # A tibble: 3 × 12
+##   Animal State  .model .type    ME  RMSE   MAE    MPE  MAPE  MASE RMSSE     ACF1
+##   <fct>  <fct>  <chr>  <chr> <dbl> <dbl> <dbl>  <dbl> <dbl> <dbl> <dbl>    <dbl>
+## 1 Pigs   Victo… HLT    Trai…  417. 9386. 7244. -0.430  8.33 0.782 0.755  0.0080 
+## 2 Pigs   Victo… HWad   Trai…  221. 7755. 5747. -0.274  6.74 0.620 0.624 - 0.0686
+## 3 Pigs   Victo… HWmul  Trai…  355. 7794. 5849. -0.144  6.84 0.631 0.627  0.0151
+
+
+
